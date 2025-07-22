@@ -1,0 +1,15 @@
+[tool.ruff]
+line-length = 99
+target-version = "py313"
+
+[tool.ruff.lint]
+ignore = ["E203", "E501", "RET503", "RET504"]
+select = ["F", "E", "W", "Q", "I", "N", "B", "UP", "COM", "RSE", "RET", "ISC", "DTZ"]
+
+[tool.ruff.lint.flake8-type-checking]
+quote-annotations = true
+
+[tool.ruff.lint.isort]
+case-sensitive = true
+combine-as-imports = true
+force-wrap-aliases = true
