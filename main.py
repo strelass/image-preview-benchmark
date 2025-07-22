@@ -27,10 +27,10 @@ class GeneratorType(enum.StrEnum):
 
 
 class BasePreviewGenerator(abc.ABC):
-    def create_preview(self, input_path: Path, output_path: Path, dpi: int) -> None:
+    def create_preview(self, input_path: Path, output_path: Path, dpi: int, quality: int) -> None:
         start_time = time.perf_counter()
         try:
-            self._create_preview(input_path, output_path, dpi)
+            self._create_preview(input_path, output_path, dpi, quality)
             end_time = time.perf_counter()
             duration = end_time - start_time
             print(f"{self.__class__.__name__} {input_path.name} ({dpi}): {duration:.4f}")
@@ -38,21 +38,28 @@ class BasePreviewGenerator(abc.ABC):
             print(f"An error occurred with {self.__class__.__name__} preview generation: {e}")
 
     @abc.abstractmethod
-    def _create_preview(self, input_path: Path, output_path: Path, dpi: int) -> None: ...
+    def _create_preview(
+        self,
+        input_path: Path,
+        output_path: Path,
+        dpi: int,
+        quality: int,
+    ) -> None: ...
 
 
 class WandPreviewGenerator(BasePreviewGenerator):
-    def _create_preview(self, input_path: Path, output_path: Path, dpi: int) -> None:
+    def _create_preview(self, input_path: Path, output_path: Path, dpi: int, quality: int) -> None:
         with Image(filename=f"{input_path}[0]", resolution=dpi) as img:
             img.background_color = Color("white")
             img.alpha_channel = "remove"
             img.transform_colorspace("srgb")
             img.format = "jpeg"
+            img.compression_quality = quality
             img.save(filename=str(output_path))
 
 
 class Pdf2imagePreviewGenerator(BasePreviewGenerator):
-    def _create_preview(self, input_path: Path, output_path: Path, dpi: int) -> None:
+    def _create_preview(self, input_path: Path, output_path: Path, dpi: int, quality: int) -> None:
         images = convert_from_path(
             input_path,
             dpi=dpi,
@@ -62,32 +69,32 @@ class Pdf2imagePreviewGenerator(BasePreviewGenerator):
             thread_count=1,
         )
         if images:
-            images[0].save(str(output_path), "JPEG")
+            images[0].save(str(output_path), "JPEG", quality=quality)
 
 
 class FitzPreviewGenerator(BasePreviewGenerator):
-    def _create_preview(self, input_path: Path, output_path: Path, dpi: int) -> None:
+    def _create_preview(self, input_path: Path, output_path: Path, dpi: int, quality: int) -> None:
         doc = fitz.open(input_path)
         try:
             page = doc.load_page(0)
             pix = page.get_pixmap(dpi=dpi)
-            pix.save(output_path, "JPEG")
+            pix.save(output_path, "jpeg", jpg_quality=quality)
         finally:
             doc.close()
 
 
 class Pypdfium2PreviewGenerator(BasePreviewGenerator):
-    def _create_preview(self, input_path: Path, output_path: Path, dpi: int) -> None:
+    def _create_preview(self, input_path: Path, output_path: Path, dpi: int, quality: int) -> None:
         doc = pdfium.PdfDocument(input_path)
         page = doc[0]
         image = page.render(scale=dpi / 72).to_pil()
-        image.save(output_path, "JPEG")
+        image.save(output_path, "JPEG", quality=quality)
 
 
 class PyvipsPreviewGenerator(BasePreviewGenerator):
-    def _create_preview(self, input_path: Path, output_path: Path, dpi: int) -> None:
+    def _create_preview(self, input_path: Path, output_path: Path, dpi: int, quality: int) -> None:
         image = pyvips.Image.new_from_file(str(input_path), dpi=dpi, page=0)
-        image.write_to_file(str(output_path))
+        image.write_to_file(str(output_path), Q=quality)
 
 
 class PreviewGenerationEvaluator:
@@ -112,17 +119,25 @@ class PreviewGenerationEvaluator:
     ) -> None:
         self.__generators[generator_type] = generator()
 
-    def run_preview_benchmark(self, *, generator_type: GeneratorType, dpi_set: list[int]) -> None:
+    def run_preview_benchmark(
+        self,
+        *,
+        generator_type: GeneratorType,
+        dpi_set: list[int],
+        quality_set: list[int],
+    ) -> None:
         for dpi in dpi_set:
-            for input_file in self.input_files:
-                pure_name = os.path.splitext(input_file.name)[0]
-                output_dir = self.output_path / pure_name / str(dpi)
-                output_dir.mkdir(parents=True, exist_ok=True)
-                self.__generators[generator_type].create_preview(
-                    input_path=input_file,
-                    output_path=output_dir / f"{generator_type}.jpg",
-                    dpi=dpi,
-                )
+            for quality in quality_set:
+                for input_file in self.input_files:
+                    pure_name = os.path.splitext(input_file.name)[0]
+                    output_dir = self.output_path / pure_name / str(dpi) / str(quality)
+                    output_dir.mkdir(parents=True, exist_ok=True)
+                    self.__generators[generator_type].create_preview(
+                        input_path=input_file,
+                        output_path=output_dir / f"{generator_type}.jpg",
+                        dpi=dpi,
+                        quality=quality,
+                    )
 
 
 if __name__ == "__main__":
@@ -142,7 +157,16 @@ if __name__ == "__main__":
         dest="dpi_set",
         type=int,
         nargs="+",
-        default=[100, 150, 200, 300],
+        default=[150, 200, 250],
+    )
+    parser.add_argument(
+        "--quality-set",
+        "-q",
+        action="store",
+        dest="quality_set",
+        type=int,
+        nargs="+",
+        default=[75, 85, 95],
     )
     parser.add_argument(
         "--input-path",
@@ -165,4 +189,5 @@ if __name__ == "__main__":
     preview_generation_evaluator.run_preview_benchmark(
         generator_type=args.generator_type,
         dpi_set=args.dpi_set,
+        quality_set=args.quality_set,
     )
