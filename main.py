@@ -27,13 +27,22 @@ class GeneratorType(enum.StrEnum):
 
 
 class BasePreviewGenerator(abc.ABC):
-    def create_preview(self, input_path: Path, output_path: Path, dpi: int, quality: int) -> None:
+    def create_preview(
+        self,
+        input_path: Path,
+        output_path: Path,
+        dpi: int,
+        quality: int,
+        image_type: str,
+    ) -> None:
         start_time = time.perf_counter()
         try:
-            self._create_preview(input_path, output_path, dpi, quality)
+            self._create_preview(input_path, output_path, dpi, quality, image_type)
             end_time = time.perf_counter()
             duration = end_time - start_time
-            print(f"{self.__class__.__name__} {input_path.name} ({dpi}): {duration:.4f}")
+            print(
+                f"{self.__class__.__name__} {input_path.name} {dpi=} {quality=} {image_type=}: {duration:.4f}",
+            )
         except Exception as e:
             print(f"An error occurred with {self.__class__.__name__} preview generation: {e}")
 
@@ -44,57 +53,105 @@ class BasePreviewGenerator(abc.ABC):
         output_path: Path,
         dpi: int,
         quality: int,
+        image_type: str,
     ) -> None: ...
 
 
 class WandPreviewGenerator(BasePreviewGenerator):
-    def _create_preview(self, input_path: Path, output_path: Path, dpi: int, quality: int) -> None:
+    def _create_preview(
+        self,
+        input_path: Path,
+        output_path: Path,
+        dpi: int,
+        quality: int,
+        image_type: str,
+    ) -> None:
         with Image(filename=f"{input_path}[0]", resolution=dpi) as img:
             img.background_color = Color("white")
             img.alpha_channel = "remove"
             img.transform_colorspace("srgb")
-            img.format = "jpeg"
+            img.format = image_type
             img.compression_quality = quality
             img.save(filename=str(output_path))
 
 
 class Pdf2imagePreviewGenerator(BasePreviewGenerator):
-    def _create_preview(self, input_path: Path, output_path: Path, dpi: int, quality: int) -> None:
+    def _create_preview(
+        self,
+        input_path: Path,
+        output_path: Path,
+        dpi: int,
+        quality: int,
+        image_type: str,
+    ) -> None:
         images = convert_from_path(
             input_path,
             dpi=dpi,
             first_page=1,
             last_page=1,
-            fmt="JPEG",
+            fmt=image_type,
             thread_count=1,
         )
         if images:
-            images[0].save(str(output_path), "JPEG", quality=quality)
+            if image_type == "jpeg":
+                images[0].save(str(output_path), "JPEG", quality=quality)
+            else:
+                compress_level = int(quality / 100 * 9)
+                images[0].save(str(output_path), "PNG", compress_level=compress_level)
 
 
 class FitzPreviewGenerator(BasePreviewGenerator):
-    def _create_preview(self, input_path: Path, output_path: Path, dpi: int, quality: int) -> None:
+    def _create_preview(
+        self,
+        input_path: Path,
+        output_path: Path,
+        dpi: int,
+        quality: int,
+        image_type: str,
+    ) -> None:
         doc = fitz.open(input_path)
         try:
             page = doc.load_page(0)
             pix = page.get_pixmap(dpi=dpi)
-            pix.save(output_path, "jpeg", jpg_quality=quality)
+            pix.save(output_path, image_type, jpg_quality=quality)
         finally:
             doc.close()
 
 
 class Pypdfium2PreviewGenerator(BasePreviewGenerator):
-    def _create_preview(self, input_path: Path, output_path: Path, dpi: int, quality: int) -> None:
+    def _create_preview(
+        self,
+        input_path: Path,
+        output_path: Path,
+        dpi: int,
+        quality: int,
+        image_type: str,
+    ) -> None:
         doc = pdfium.PdfDocument(input_path)
         page = doc[0]
         image = page.render(scale=dpi / 72).to_pil()
-        image.save(output_path, "JPEG", quality=quality)
+        if image_type == "jpeg":
+            image.save(output_path, "JPEG", quality=quality)
+        else:
+            compress_level = int(quality / 100 * 9)
+            image.save(output_path, "PNG", compress_level=compress_level)
 
 
 class PyvipsPreviewGenerator(BasePreviewGenerator):
-    def _create_preview(self, input_path: Path, output_path: Path, dpi: int, quality: int) -> None:
+    def _create_preview(
+        self,
+        input_path: Path,
+        output_path: Path,
+        dpi: int,
+        quality: int,
+        image_type: str,
+    ) -> None:
         image = pyvips.Image.new_from_file(str(input_path), dpi=dpi, page=0)
-        image.write_to_file(str(output_path), Q=quality)
+        if image_type == "jpeg":
+            image.write_to_file(str(output_path), Q=quality)
+        else:
+            compression = int(quality / 100 * 9)
+            image.write_to_file(str(output_path), compression=compression)
 
 
 class PreviewGenerationEvaluator:
@@ -125,23 +182,34 @@ class PreviewGenerationEvaluator:
         generator_type: GeneratorType,
         dpi_set: list[int],
         quality_set: list[int],
+        image_type: str,
     ) -> None:
         for dpi in dpi_set:
             for quality in quality_set:
                 for input_file in self.input_files:
                     pure_name = os.path.splitext(input_file.name)[0]
-                    output_dir = self.output_path / pure_name / str(dpi) / str(quality)
+                    output_dir = (
+                        self.output_path / image_type / pure_name / str(dpi) / str(quality)
+                    )
                     output_dir.mkdir(parents=True, exist_ok=True)
                     self.__generators[generator_type].create_preview(
                         input_path=input_file,
-                        output_path=output_dir / f"{generator_type}.jpg",
+                        output_path=output_dir / f"{generator_type}.{image_type}",
                         dpi=dpi,
                         quality=quality,
+                        image_type=image_type,
                     )
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--image-type",
+        action="store",
+        dest="image_type",
+        choices=["jpeg", "png"],
+        default="png",
+    )
     parser.add_argument(
         "--generator-type",
         "-g",
@@ -190,4 +258,5 @@ if __name__ == "__main__":
         generator_type=args.generator_type,
         dpi_set=args.dpi_set,
         quality_set=args.quality_set,
+        image_type=args.image_type,
     )

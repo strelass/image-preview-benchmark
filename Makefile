@@ -2,6 +2,7 @@
 
 # Default generator type if not provided
 GENERATOR ?= wand
+IMG_TYPE ?= jpeg
 
 build:
 	@echo "Building Docker image..."
@@ -9,7 +10,7 @@ build:
 
 run:
 	@echo "Running container with generator type: $(GENERATOR)..."
-	docker compose run --rm app --generator-type=$(GENERATOR)
+	docker compose run --rm app --generator-type=$(GENERATOR) --image-type=$(IMG_TYPE)
 
 run-all:
 	docker compose run --rm app --generator-type=wand
